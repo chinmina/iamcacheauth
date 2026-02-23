@@ -3,6 +3,7 @@ package iamcacheauth
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4sdk "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 )
 
 // staticCredentials is a test helper that returns fixed AWS credentials.
@@ -405,4 +407,310 @@ func TestNewMemoryDB_EmptyRegion(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewMemoryDB() with empty region should return error")
 	}
+}
+
+// --- Differential tests against aws-sdk-go-v2/aws/signer/v4 ---
+//
+// These tests verify that iamcacheauth produces tokens equivalent to the
+// reference signing approach used by build-on-aws/aws-redis-iam-auth-golang
+// (and other community implementations) which use v4.NewSigner().PresignHTTP.
+//
+// synctest controls time.Now() inside the bubble so both signers see the
+// same timestamp. Both signers produce identical signatures; the only
+// permitted difference is query parameter ordering (which is not
+// semantically significant in URLs).
+
+const hexEncodedSHA256EmptyString = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// referenceToken generates a token using the aws-sdk-go-v2 v4.PresignHTTP
+// approach, mirroring the build-on-aws/aws-redis-iam-auth-golang implementation.
+func referenceToken(t *testing.T, serviceName, resourceName, userID, region string, serverless bool, creds aws.Credentials) string {
+	t.Helper()
+
+	queryParams := url.Values{
+		"Action":        {"connect"},
+		"User":          {userID},
+		"X-Amz-Expires": {"900"},
+	}
+	if serverless {
+		queryParams.Set("ResourceType", "ServerlessCache")
+	}
+
+	authURL := url.URL{
+		Host:     resourceName,
+		Scheme:   "http",
+		Path:     "/",
+		RawQuery: queryParams.Encode(),
+	}
+
+	req, err := http.NewRequest(http.MethodGet, authURL.String(), nil)
+	if err != nil {
+		t.Fatalf("reference: failed to build request: %v", err)
+	}
+
+	signer := v4sdk.NewSigner()
+	signedURL, _, err := signer.PresignHTTP(
+		context.Background(),
+		creds,
+		req,
+		hexEncodedSHA256EmptyString,
+		serviceName,
+		region,
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("reference: signing failed: %v", err)
+	}
+
+	return strings.Replace(signedURL, "http://", "", 1)
+}
+
+// assertTokensEqual compares two tokens by parsing their host/path and query
+// parameters independently. Query parameter order varies between signing
+// libraries and is not semantically significant. The comparison verifies that
+// both tokens have the same host/path prefix and identical key-value pairs,
+// including the cryptographic signature.
+func assertTokensEqual(t *testing.T, got, want string) {
+	t.Helper()
+
+	gotParts := strings.SplitN(got, "?", 2)
+	wantParts := strings.SplitN(want, "?", 2)
+
+	if len(gotParts) != 2 || len(wantParts) != 2 {
+		t.Fatalf("malformed tokens:\n  got:  %s\n  want: %s", got, want)
+	}
+
+	if gotParts[0] != wantParts[0] {
+		t.Errorf("host/path mismatch:\n  got:  %s\n  want: %s", gotParts[0], wantParts[0])
+	}
+
+	gotVals, err := url.ParseQuery(gotParts[1])
+	if err != nil {
+		t.Fatalf("failed to parse got query: %v", err)
+	}
+	wantVals, err := url.ParseQuery(wantParts[1])
+	if err != nil {
+		t.Fatalf("failed to parse want query: %v", err)
+	}
+
+	// Check every key in want exists in got with the same value.
+	for key, wantV := range wantVals {
+		gotV, ok := gotVals[key]
+		if !ok {
+			t.Errorf("missing query parameter %q (want %q)", key, wantV)
+			continue
+		}
+		if len(gotV) != len(wantV) {
+			t.Errorf("parameter %q: got %d values, want %d", key, len(gotV), len(wantV))
+			continue
+		}
+		for i := range wantV {
+			if gotV[i] != wantV[i] {
+				t.Errorf("parameter %q[%d]: got %q, want %q", key, i, gotV[i], wantV[i])
+			}
+		}
+	}
+
+	// Check got has no extra keys.
+	for key := range gotVals {
+		if _, ok := wantVals[key]; !ok {
+			t.Errorf("unexpected query parameter %q = %q", key, gotVals[key])
+		}
+	}
+}
+
+func TestDifferential_ElastiCache(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := testAWSConfig("us-east-1")
+		gen, err := NewElastiCache("my-user", "my-cache", cfg)
+		if err != nil {
+			t.Fatalf("NewElastiCache() unexpected error: %v", err)
+		}
+
+		got, err := gen.Token(context.Background())
+		if err != nil {
+			t.Fatalf("Token() unexpected error: %v", err)
+		}
+
+		creds, _ := cfg.Credentials.Retrieve(context.Background())
+		want := referenceToken(t, "elasticache", "my-cache", "my-user", "us-east-1", false, creds)
+
+		assertTokensEqual(t, got, want)
+	})
+}
+
+func TestDifferential_ElastiCacheServerless(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := testAWSConfig("us-east-1")
+		gen, err := NewElastiCache("my-user", "my-cache", cfg, WithServerless())
+		if err != nil {
+			t.Fatalf("NewElastiCache() unexpected error: %v", err)
+		}
+
+		got, err := gen.Token(context.Background())
+		if err != nil {
+			t.Fatalf("Token() unexpected error: %v", err)
+		}
+
+		creds, _ := cfg.Credentials.Retrieve(context.Background())
+		want := referenceToken(t, "elasticache", "my-cache", "my-user", "us-east-1", true, creds)
+
+		assertTokensEqual(t, got, want)
+	})
+}
+
+func TestDifferential_MemoryDB(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := testAWSConfig("us-east-1")
+		gen, err := NewMemoryDB("my-user", "my-cluster", cfg)
+		if err != nil {
+			t.Fatalf("NewMemoryDB() unexpected error: %v", err)
+		}
+
+		got, err := gen.Token(context.Background())
+		if err != nil {
+			t.Fatalf("Token() unexpected error: %v", err)
+		}
+
+		creds, _ := cfg.Credentials.Retrieve(context.Background())
+		want := referenceToken(t, "memorydb", "my-cluster", "my-user", "us-east-1", false, creds)
+
+		assertTokensEqual(t, got, want)
+	})
+}
+
+func TestDifferential_DifferentRegion(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := testAWSConfig("ap-southeast-2")
+		gen, err := NewElastiCache("my-user", "my-cache", cfg)
+		if err != nil {
+			t.Fatalf("NewElastiCache() unexpected error: %v", err)
+		}
+
+		got, err := gen.Token(context.Background())
+		if err != nil {
+			t.Fatalf("Token() unexpected error: %v", err)
+		}
+
+		creds, _ := cfg.Credentials.Retrieve(context.Background())
+		want := referenceToken(t, "elasticache", "my-cache", "my-user", "ap-southeast-2", false, creds)
+
+		assertTokensEqual(t, got, want)
+	})
+}
+
+func TestDifferential_VariedInputs(t *testing.T) {
+	cases := []struct {
+		name         string
+		serviceName  string
+		resourceName string
+		userID       string
+		region       string
+		serverless   bool
+	}{
+		{"long-cache-name", "elasticache", "my-very-long-cache-name-prod-us-east-1", "admin", "us-east-1", false},
+		{"special-user-chars", "elasticache", "my-cache", "user@domain.com", "eu-west-1", false},
+		{"memorydb-eu", "memorydb", "prod-cluster", "service-account", "eu-central-1", false},
+		{"serverless-west", "elasticache", "serverless-cache", "app-user", "us-west-2", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				cfg := testAWSConfig(tc.region)
+
+				var gen *TokenGenerator
+				var err error
+				if tc.serviceName == "elasticache" {
+					opts := []Option{}
+					if tc.serverless {
+						opts = append(opts, WithServerless())
+					}
+					gen, err = NewElastiCache(tc.userID, tc.resourceName, cfg, opts...)
+				} else {
+					gen, err = NewMemoryDB(tc.userID, tc.resourceName, cfg)
+				}
+				if err != nil {
+					t.Fatalf("constructor unexpected error: %v", err)
+				}
+
+				got, err := gen.Token(context.Background())
+				if err != nil {
+					t.Fatalf("Token() unexpected error: %v", err)
+				}
+
+				creds, _ := cfg.Credentials.Retrieve(context.Background())
+				want := referenceToken(t, tc.serviceName, tc.resourceName, tc.userID, tc.region, tc.serverless, creds)
+
+				assertTokensEqual(t, got, want)
+			})
+		})
+	}
+}
+
+func TestDifferential_WithoutSessionToken(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := aws.Config{
+			Region: "us-east-1",
+			Credentials: staticCredentials{
+				AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+				SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				SessionToken:    "",
+			},
+		}
+		gen, err := NewElastiCache("my-user", "my-cache", cfg)
+		if err != nil {
+			t.Fatalf("NewElastiCache() unexpected error: %v", err)
+		}
+
+		got, err := gen.Token(context.Background())
+		if err != nil {
+			t.Fatalf("Token() unexpected error: %v", err)
+		}
+
+		creds, _ := cfg.Credentials.Retrieve(context.Background())
+		want := referenceToken(t, "elasticache", "my-cache", "my-user", "us-east-1", false, creds)
+
+		assertTokensEqual(t, got, want)
+	})
+}
+
+func TestDifferential_TimeSensitivity(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := testAWSConfig("us-east-1")
+		gen, err := NewElastiCache("my-user", "my-cache", cfg)
+		if err != nil {
+			t.Fatalf("NewElastiCache() unexpected error: %v", err)
+		}
+		creds, _ := cfg.Credentials.Retrieve(context.Background())
+
+		// Generate at t=0
+		got1, err := gen.Token(context.Background())
+		if err != nil {
+			t.Fatalf("Token() #1 unexpected error: %v", err)
+		}
+		want1 := referenceToken(t, "elasticache", "my-cache", "my-user", "us-east-1", false, creds)
+		assertTokensEqual(t, got1, want1)
+
+		// Advance fake clock by 5 minutes
+		time.Sleep(5 * time.Minute)
+
+		// Generate at t=5m — both should agree on the new timestamp
+		got2, err := gen.Token(context.Background())
+		if err != nil {
+			t.Fatalf("Token() #2 unexpected error: %v", err)
+		}
+		want2 := referenceToken(t, "elasticache", "my-cache", "my-user", "us-east-1", false, creds)
+		assertTokensEqual(t, got2, want2)
+
+		// The two tokens must differ (different timestamps)
+		vals1 := parseToken(t, got1)
+		vals2 := parseToken(t, got2)
+		if vals1.Get("X-Amz-Signature") == vals2.Get("X-Amz-Signature") {
+			t.Error("tokens at different times should have different signatures")
+		}
+		if vals1.Get("X-Amz-Date") == vals2.Get("X-Amz-Date") {
+			t.Error("tokens at different times should have different X-Amz-Date values")
+		}
+	})
 }
