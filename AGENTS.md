@@ -60,24 +60,6 @@ make test        # go test -race ./...
 make test-integration   # go test -tags=integration -race -v ./...
 ```
 
-### Integration tests
-
-Integration tests require a live ElastiCache instance and the following
-environment variables:
-
-| Variable | Description |
-|---|---|
-| `ELASTICACHE_ENDPOINT` | DNS endpoint and port, e.g. `my-cache.xxxx.use1.cache.amazonaws.com:6379` |
-| `ELASTICACHE_CACHE_NAME` | Replication group ID or serverless cache name |
-| `ELASTICACHE_USER_ID` | IAM-enabled ElastiCache user ID |
-| `ELASTICACHE_REGION` | AWS region, e.g. `us-east-1` |
-| `ELASTICACHE_SERVERLESS` | `true` or `false` |
-
-Do not run integration tests in CI unless the environment is explicitly
-configured for it.
-
----
-
 ## Dependency Constraints
 
 **Keep the dependency footprint minimal.** The only permitted non-stdlib
@@ -97,8 +79,6 @@ sub-package suffix; the `go get` and `go.mod` entry uses the module path.
 Do not add any other third-party dependencies without explicit discussion.
 Convenience libraries (ORMs, routers, assertion frameworks, etc.) are not
 appropriate for this library.
-
----
 
 ## Test Assertions — Standard Library Only
 
@@ -126,8 +106,6 @@ assert.Equal(t, want, got)
 Helper functions in `_test.go` files are fine; they should call `t.Helper()`
 and delegate to `t.Errorf` / `t.Fatalf`.
 
----
-
 ## Development Process — TDD
 
 Follow **Test-Driven Development**:
@@ -146,8 +124,6 @@ automatically — no clock injection into production code is required, and
 tests run in microseconds rather than real time.
 
 Do not write code speculatively ahead of a failing test.
-
----
 
 ## Git Usage
 
@@ -208,14 +184,8 @@ A PR description should answer:
 Do not write a bulleted list that mirrors the commit titles or file changes.
 That information is already visible in the PR diff and commit log.
 
----
-
 ## Architectural Constraints
 
-- **No `context.Context` in the credential callback.** The `valkey-go`
-  `AuthCredentialsFn` signature does not accept a context. Use
-  `context.Background()` internally for AWS credential retrieval. This is a
-  known API limitation of valkey-go.
 - **TLS is mandatory.** `ClientOption.TLSConfig` must be non-nil when using
   IAM authentication. Document this prominently.
 - **Connection lifetime.** ElastiCache disconnects IAM-authenticated

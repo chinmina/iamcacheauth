@@ -2,9 +2,18 @@
 
 AWS IAM authentication token generator for Amazon ElastiCache and MemoryDB, usable with any Redis-compatible Go client.
 
-> This library implements the token algorithm as published by AWS, something
+> [!NOTE]
+> This library implements the token algorithm as [published by AWS][elasticache-iam-reference], something
 > that is currently stable and has a low risk of change. Aside from bugs and
 > dependency updates, it is highly unlikely that this library will be updated.
+>
+> The library is MIT licensed: if there are dependency issues you wish to avoid,
+> please feel free to incorporate the `library*.go` and `LICENSE.txt` files into
+> your own repository.
+>
+> All that said, contributions are welcome.
+
+Dependencies have been kept to the minimum practical, and the usage of the dependencies is simple. A `replace` statement in `go.mod` will allow a consuming module to align this library's dependency versions with theirs.
 
 ## What it does
 
@@ -25,14 +34,14 @@ ElastiCache and MemoryDB IAM authentication works by using a short-lived SigV4 p
 
 ## Limitations
 
-These are AWS-imposed constraints that apply regardless of client library. See the [ElastiCache](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth-iam.html) and [MemoryDB](https://docs.aws.amazon.com/memorydb/latest/devguide/auth-iam.html) IAM auth documentation.
+These are AWS-imposed constraints that apply regardless of client library. See the [ElastiCache][elasticache-iam-reference] and [MemoryDB][memorydb-iam-reference] IAM auth documentation.
 
 Both services share these limitations:
 
 - **12-hour connection limit** — the server disconnects after 12 hours. Send `AUTH`/`HELLO` with a fresh token to renew, or set your client's connection lifetime below 12 hours (e.g. `11 * time.Hour`) so it reconnects proactively.
 - **15-minute token TTL** — tokens expire 15 minutes after signing. This library generates a fresh token per call, so expiry is not normally a concern.
 - **No `MULTI`/`EXEC`** — IAM authentication cannot be used inside transaction blocks.
-- **Restricted IAM condition keys** — not all global condition keys are available for `elasticache:Connect` / `memorydb:connect` policies. ElastiCache [documents the supported keys](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth-iam.html) per deployment type (serverless vs replication group); MemoryDB does not specify which keys are supported.
+- **Restricted IAM condition keys** — not all global condition keys are available for `elasticache:Connect` / `memorydb:connect` policies. ElastiCache [documents the supported keys][elasticache-iam-reference] per deployment type (serverless vs replication group); MemoryDB does not specify which keys are supported.
 
 ## Supported targets
 
@@ -177,3 +186,6 @@ pool := &redigo.Pool{
 make agent          # format, vet, build, and unit test
 make test           # unit tests only (no AWS required)
 ```
+
+[elasticache-iam-reference]: https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth-iam.html
+[memorydb-iam-reference]: https://docs.aws.amazon.com/memorydb/latest/devguide/auth-iam.html
