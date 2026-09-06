@@ -18,9 +18,15 @@ jobs:
         with:
           fetch-depth: 2
 
+      # mise.toml is the single source of truth for the build toolchain.
+      # go.mod's `go` directive is a compatibility floor, not a build version,
+      # so it deliberately is not used to select the Go installed here.
+      - uses: jdx/mise-action@v2
+
+      # Version deliberately omitted: mise has already put Go on PATH. This step
+      # runs only for its module and build caching, keyed off that Go version.
+      # It must stay after mise-action, which provides the `go` it inspects.
       - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
 
       - name: Build
         run: make build

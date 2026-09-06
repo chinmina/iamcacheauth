@@ -15,14 +15,13 @@ integrates with the `valkey-go` client via its `AuthCredentialsFn` callback.
 
 ## Toolchain Management
 
-The required Go version is managed by [mise](https://mise.jdx.dev/) via
-`mise.toml` in the repository root. `mise.toml` also sets environment
-variables (e.g. `GODEBUG=netdns=cgo`) needed for reliable operation in
-sandboxed environments.
+The Go version used to build this repository is managed by
+[mise](https://mise.jdx.dev/) via `mise.toml` in the repository root.
+`mise.toml` is the single source of truth for the build toolchain, locally and
+in CI.
 
-**Never modify the `go` directive or `toolchain` line in `go.mod` to work
-around a missing toolchain.** Instead, install mise and then the pinned
-toolchain:
+**Never modify the `go` directive in `go.mod` to work around a missing
+toolchain.** Instead, install mise and then the pinned toolchain:
 
 ```bash
 curl https://mise.run | sh   # install mise (skip if already installed)
@@ -37,9 +36,34 @@ eval "$(mise activate bash)"
 ```
 
 All `make` targets and `go` commands will then use the correct version.
-If a dependency requires a newer Go version than what is pinned, update
-`mise.toml` (and the `go.mod` `go` directive to match) — do not
-downgrade `go.mod` to match an older local toolchain.
+
+### `go.mod` declares a floor, not a build version
+
+`go.mod` carries a `go` directive and no `toolchain` line. The two answer
+different questions, and only one belongs here.
+
+| Line | Meaning |
+|---|---|
+| `go 1.25` in `go.mod` | Minimum language version a consumer must support |
+| `go = "1.27.1"` in `mise.toml` | Toolchain this repository is built and tested with |
+
+The `go` directive is a compatibility floor. As a library, this repository is
+imported by callers on older toolchains, so raising the floor is a breaking
+change for them. Write it without a patch version (`1.25`, not `1.25.0`) and
+raise it only as a deliberate decision, when the code needs newer language or
+standard library features.
+
+Never raise the `go` directive to match the installed toolchain. Building on a
+newer Go than the directive names is the normal state.
+
+There is deliberately no `toolchain` line. It would duplicate `mise.toml` as a
+second declaration of the build version, and `actions/setup-go` prefers it over
+the `go` directive — so a stale `toolchain` line silently decides what CI
+builds with. Do not reintroduce one. If a dependency requires a newer Go
+version, raise `go = ` in `mise.toml`.
+
+To upgrade the build toolchain, change `mise.toml` alone, then run
+`mise install`. CI picks the same version up from the same file.
 
 ---
 
