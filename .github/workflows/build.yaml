@@ -7,20 +7,38 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: read # building and testing only needs to read the repository
+
+# Supersede in-progress runs for the same ref: a push that lands while an
+# earlier run is still going makes that run's result irrelevant. main is
+# excluded so that every commit there keeps a build result attached to it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:
+    name: Build and test
     runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+          # Nothing here pushes back to the repository, so the checkout
+          # credential is left out of .git/config where later steps and any
+          # uploaded artifact could pick it up.
+          persist-credentials: false
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
+      # mise.toml is the single source of truth for the build toolchain.
+      # go.mod's `go` directive is a compatibility floor, not a build version,
+      # so it deliberately is not used to select the Go installed here.
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      # Version deliberately omitted: mise has already put Go on PATH. This step
+      # runs only for its module and build caching, keyed off that Go version.
+      # It must stay after mise-action, which provides the `go` it inspects.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
 
       - name: Build
         run: make build

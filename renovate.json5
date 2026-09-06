@@ -1,0 +1,36 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    // Floats on chinmina/.github's default branch by design: a shared-config
+    // fix reaches every consuming repo without a migration. Do not pin.
+    "github>chinmina/.github//renovate/shared.json5",
+  ],
+  // Repo-specific rules only. Order broad -> narrow: grouping rules first,
+  // narrowing overrides (pinDigests, enabled, allowedVersions, single-dependency
+  // exceptions) last. The ordering is intentional -- last match wins per-option.
+  packageRules: [
+    {
+      // Narrowing override on the shared "Go runtime" group, which matches
+      // depName "go" across gomod and mise with rangeStrategy: "bump".
+      //
+      // The gomod manager extracts three distinct deps named "go": the go.mod
+      // `go` directive (depType "golang"), the go.mod `toolchain` line (depType
+      // "toolchain"), and mise's go tool. Renovate declines to bump the `go`
+      // directive by default -- go-mod-directive versioning reads "1.25" as
+      // "^1.25", so newer releases already satisfy it -- but the shared group's
+      // rangeStrategy: "bump" overrides that and would walk the directive up in
+      // step with the toolchain.
+      //
+      // For a library the `go` directive is a compatibility floor, not a build
+      // version: raising it drops consumers on older toolchains. It is raised
+      // deliberately, when the code needs newer language features. Only this
+      // depType is disabled, so `toolchain` and mise still update together in
+      // the shared "Go runtime" group.
+      description: "Never auto-bump the go.mod `go` directive; it is a deliberate compatibility floor.",
+      matchManagers: ["gomod"],
+      matchDepNames: ["go"],
+      matchDepTypes: ["golang"],
+      enabled: false,
+    },
+  ],
+}

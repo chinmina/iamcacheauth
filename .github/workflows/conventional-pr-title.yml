@@ -5,7 +5,7 @@ on:
     types: [opened, reopened, edited]
 
 permissions:
-  pull-requests: read
+  pull-requests: read # reads the PR title to validate it; reports via job status
 
 jobs:
   conventional-pr-title:
