@@ -1,0 +1,15 @@
+rules:
+  unpinned-uses:
+    config:
+      # Hash-pinning stays the default for every action. The single exception is
+      # chinmina/.github, which publishes `verified-actions` as a deliberately
+      # moving ref so shared workflow fixes reach consuming repos without a
+      # commit in each one. The org Renovate config encodes the same exception
+      # (pinDigests: false, scoped to that repo alone), so hash-pinning here
+      # would fight policy rather than add security.
+      #
+      # The trailing /* is required: the exact name `chinmina/.github` does not
+      # match a reusable-workflow reference that carries a subpath.
+      policies:
+        chinmina/.github/*: ref-pin
+        "*": hash-pin
